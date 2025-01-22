@@ -1,0 +1,262 @@
+---
+title: "Cyclistic Bike Share Analysis"
+author: "Chanho Lee"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Introduction
+
+In this project, I analyze the Cyclistic bike-share data for Q1 of 2019 and 2020. My goal is to understand how different types of riders (members vs. casual users) use the bikes across various days of the week, ride durations, and peak hours. Additionally, I will explore the most popular starting stations by rider type and finally export the relevant aggregated data for further analysis.
+
+The tools I used in this project are:
+
+- **Excel**: I used Excel to check data types, formats, and added key columns like ride length and day of the week.
+- **R**: I used R for organizing and formatting the data.
+- **R Markdown**: I used R Markdown to document the project, creating visuals and clear explanations of my findings.
+
+The dataset for this project was provided by Google as part of the Google Data Analytics Professional Certificate course.
+
+
+# Research Questions
+1. How do casual riders and annual members differ in terms of:
+   - Ride duration
+   - Ride frequency by time of day and day of the week
+2. What are the most popular starting stations for each rider type?
+3. What are the peak hours for bike usage by casual and member riders?
+4. How can Cyclistic improve retention or conversion of casual riders to members?
+
+# Step 1: Collecting Data
+
+Before importing the data into R, I used Excel to inspect the data types and formats, and I added two key columns:
+
+- **ride_length**: Calculated as the difference between `ended_at` and `started_at`.
+- **day_of_week**: Calculated using the `WEEKDAY()` function to determine the day of the week for each ride.
+
+I read in the data for Q1 2019 and Q1 2020 from CSV files and imported them into R.
+
+```{r collect-data, message=FALSE, warning=FALSE}
+# Load libraries
+library(tidyverse)  # Data wrangling and visualization
+library(conflicted) # Manage function conflicts
+library(lubridate)  # Work with dates and times
+library(ggplot2)     # For custom visualizations
+library(scales)      # For better scales on plots
+library(gridExtra)   # For arranging multiple plots
+
+# Set dplyr::filter and dplyr::lag as the default choices
+conflict_prefer("filter", "dplyr")
+conflict_prefer("lag", "dplyr")
+
+# Read CSV files
+q1_2019 <- read_csv("/Users/admin/Desktop/Data/Portfolio_Project/Case_1/data/csv/Divvy_Trips_2019_Q1.csv")
+q1_2020 <- read_csv("/Users/admin/Desktop/Data/Portfolio_Project/Case_1/data/csv/Divvy_Trips_2020_Q1.csv")
+```
+
+# Step 2: Wrangle Data and Combine
+
+Next, I clean and combine the data from both 2019 and 2020. I renamed the relevant columns and removed any missing or invalid data.
+
+```{r wrangle-dangle}
+# Rename columns and clean data
+q1_2019 <- q1_2019 %>%
+  rename(
+    ride_id = trip_id,
+    rideable_type = bikeid,
+    started_at = start_time,
+    ended_at = end_time,
+    start_station_name = from_station_name,
+    start_station_id = from_station_id,
+    end_station_name = to_station_name,
+    end_station_id = to_station_id,
+    member_casual = usertype
+  )
+
+# Ensure consistent data types
+q1_2019 <- q1_2019 %>%
+  mutate(ride_id = as.character(ride_id), rideable_type = as.character(rideable_type))
+
+# Combine data frames
+all_trips <- bind_rows(q1_2019, q1_2020)
+
+# Drop unnecessary columns
+all_trips <- all_trips %>%
+  select(-c(start_lat, start_lng, end_lat, end_lng, birthyear, gender, tripduration))
+
+# Clean member_casual values
+all_trips <- all_trips %>%
+  mutate(member_casual = recode(member_casual, "Subscriber" = "member", "Customer" = "casual"))
+
+# Add date-related columns
+all_trips <- all_trips %>%
+  mutate(
+    date = as.Date(started_at),
+    month = month(date),
+    day = day(date),
+    year = year(date),
+    day_of_week = wday(date, label = TRUE, abbr = FALSE),
+    hour = hour(started_at)
+  )
+
+# Calculate ride_length (in seconds)
+all_trips <- all_trips %>%
+  mutate(ride_length = as.numeric(difftime(ended_at, started_at, units = "secs")))
+
+# Remove invalid data
+all_trips_v2 <- all_trips %>%
+  filter(!is.na(ride_length) & ride_length > 0)
+
+```
+
+
+# Step 3: Descriptive Analysis
+I now explore the data by calculating basic statistics, including the mean, median, maximum, and minimum ride lengths. I also perform a summary analysis based on different time intervals and rider types.
+
+```{r analyze-data, message=FALSE, warning=FALSE}
+# Descriptive statistics for ride length
+summary(all_trips_v2$ride_length)
+
+# Summary statistics of ride lengths by member type
+ride_length_summary <- all_trips_v2 %>%
+  group_by(member_casual) %>%
+  summarise(
+    mean_ride_length = mean(ride_length),
+    median_ride_length = median(ride_length),
+    max_ride_length = max(ride_length),
+    min_ride_length = min(ride_length)
+  )
+
+# Daily summary (average ride length by day of week)
+daily_summary <- all_trips_v2 %>%
+  group_by(member_casual, day_of_week) %>%
+  summarise(mean_ride_length = mean(ride_length), total_rides = n()) %>%
+  arrange(member_casual, day_of_week)
+
+# Peak hour summary (average ride length by hour)
+peak_hour_summary <- all_trips_v2 %>%
+  group_by(hour) %>%
+  summarise(avg_ride_length = mean(ride_length), total_rides = n()) %>%
+  arrange(hour)
+
+```
+
+# Step 4: Visualizing Differences Between Rider Types
+I create several visualizations to compare how different types of riders use the bikes, focusing on the number of rides, average ride duration, and the busiest hours.
+
+```{r graph-one, message=FALSE, warning=FALSE}
+# Visualization: Number of rides by rider type (Day of Week)
+plot_rides <- all_trips_v2 %>%
+  mutate(weekday = wday(started_at, label = TRUE)) %>%
+  group_by(member_casual, weekday) %>%
+  summarise(number_of_rides = n(), .groups = "drop") %>%
+  ggplot(aes(x = weekday, y = number_of_rides, fill = member_casual)) +
+  geom_col(position = "dodge") +
+  ggtitle("Number of Rides by Rider Type") +
+  xlab("Day of the Week") +
+  ylab("Number of Rides") +
+  scale_fill_manual(values = c("casual" = "lightblue", "member" = "orange")) +
+  scale_y_continuous(labels = scales::label_number(accuracy = 1)) + 
+  scale_x_discrete(labels = scales::label_wrap(10))
+
+# Visualization: Average ride duration by rider type
+plot_duration <- all_trips_v2 %>%
+  mutate(weekday = wday(started_at, label = TRUE)) %>%
+  group_by(member_casual, weekday) %>%
+  summarise(average_duration = mean(ride_length), .groups = "drop") %>%
+  ggplot(aes(x = weekday, y = average_duration, fill = member_casual)) +
+  geom_col(position = "dodge") +
+  ggtitle("Average Ride Duration by Rider Type (Seconds)") +
+  xlab("Day of the Week") +
+  ylab("Avg Ride Duration (sec)") +
+  scale_fill_manual(values = c("casual" = "lightblue", "member" = "orange"))
+
+# Visualization: Number of Rides by Rider Type across Weekdays
+plot_riders <- all_trips_v2 %>%
+  mutate(weekday = wday(started_at, label = TRUE)) %>%
+  group_by(member_casual, weekday) %>%
+  summarise(number_of_rides = n(),
+            average_duration = mean(ride_length)) %>%
+  arrange(member_casual, weekday) %>%
+  ggplot(aes(x = weekday, y = number_of_rides, fill = member_casual)) +
+  geom_col(position = "dodge") +
+  ggtitle("Number of Rides by Rider Type across Weekdays") +
+  xlab("Day of the Week") +
+  ylab("Number of Rides") +
+  scale_fill_manual(values = c("casual" = "lightblue", "member" = "orange")) +
+  scale_y_continuous(labels = scales::label_number(accuracy = 1)) +  
+  scale_x_discrete(labels = scales::label_wrap(10)) 
+
+grid.arrange(plot_rides, plot_duration, plot_riders, nrow = 3)
+```
+
+
+```{r}
+# Number of Rides by Hour of Day
+all_trips_v2$hour <- format(as.POSIXct(all_trips_v2$started_at), "%H")
+
+ggplot(all_trips_v2, aes(x = hour, fill = member_casual)) +
+  geom_bar(position = "dodge") +
+  ggtitle("Hourly Ride Patterns by Rider Type") +
+  xlab("Hour of Day") +
+  ylab("Number of Rides") +
+  scale_fill_manual(values = c("casual" = "lightblue", "member" = "orange"))
+```
+
+
+# Step 5: Exporting Data for Further Analysis
+Finally, I export all relevant aggregated data for further analysis or sharing.
+
+* Export Summary Data for Further Analysis
+
+1. Export ride length summary by member type
+write_csv(ride_length_summary, "/Users/admin/Desktop/Data/Portfolio_Project/Case_1/data/ride_length_summary.csv")
+
+2. Export daily summary (average ride length and total rides by member type and day of the week)
+write_csv(daily_summary, "/Users/admin/Desktop/Data/Portfolio_Project/Case_1/data/daily_summary.csv")
+
+3. Export peak hour summary (average ride length and total rides by hour of the day)
+write_csv(peak_hour_summary, "/Users/admin/Desktop/Data/Portfolio_Project/Case_1/data/peak_hour_summary.csv")
+
+4. Export the top 10 starting stations by rider type
+write_csv(top_stations, "/Users/admin/Desktop/Data/Portfolio_Project/Case_1/data/top_stations.csv")
+
+5. Export the full clean dataset after removing invalid rows
+write_csv(all_trips_v2_clean, "/Users/admin/Desktop/Data/Portfolio_Project/Case_1/data/all_trips_v2_clean.csv")
+
+
+## Final Conclusion Based on My Analysis:
+
+Based on my analysis, I observed clear differences in the usage patterns of Cyclistic bike-share riders, particularly between casual riders and annual members. Key findings include:
+
+- **Ride Frequency**: Casual riders tend to use the bikes more on weekends, especially for leisure purposes, while annual members are more consistent, using the service during weekdays for commuting.
+- **Ride Duration**: Casual riders typically have longer ride durations compared to annual members, which may indicate their usage for longer recreational trips.
+- **Peak Hours**: Both rider types have different peak usage times, with casual riders showing a preference for mid-day and weekends, while annual members primarily use bikes during rush hours and weekdays.
+- **Station Usage**: There are noticeable differences in the stations frequented by both rider types, which could inform station placement and bike availability optimization.
+
+### How Could Your Team and Business Apply Your Insights?
+
+Cyclistic's marketing and operations teams can leverage these insights to tailor their strategies more effectively:
+
+- **Marketing Campaigns**: Cyclistic can design targeted campaigns that cater to casual riders during weekends or holidays, offering promotions or loyalty rewards. For annual members, focusing on weekday incentives or commuter-friendly packages could improve engagement.
+- **Operations Optimization**: By understanding the peak usage times and stations preferred by each group, the operations team can optimize bike distribution and station placement, ensuring bikes are available where they’re most needed.
+- **Customer Retention**: Identifying seasonal trends and peak times for each rider type allows the team to develop retention strategies based on usage patterns, such as offering seasonal discounts to casual riders or exclusive offers to long-term members.
+
+### What Next Steps Would You or Your Stakeholders Take Based on Your Findings?
+
+Based on the analysis, the following steps could be considered:
+
+1. **A/B Testing of Marketing Strategies**: Implement targeted marketing campaigns based on the differences between casual and annual riders. Evaluate which strategies result in increased user engagement and retention.
+2. **Improving Bike Availability**: Adjust bike allocation in real-time to match demand patterns (e.g., more bikes available in tourist-heavy areas during weekends for casual riders).
+3. **Referral Programs**: Launch referral programs aimed at turning casual riders into annual members by leveraging the identified usage trends and offering tailored incentives.
+4. **Further Data Analysis**: Stakeholders could analyze ride behavior further by exploring the impact of weather, special events, or new station openings on ride frequency and duration.
+
+### Is There Additional Data You Could Use to Expand on Your Findings?
+
+To expand on the findings, the following additional data could be useful:
+
+- **Weather Data**: Analyzing how different weather conditions (temperature, rain, etc.) influence ride frequency and duration could provide deeper insights, especially for casual riders.
+- **Demographic Information**: Adding user demographic data (e.g., age, income) could help refine the segmentation between casual and annual members, providing more personalized marketing opportunities.
+- **Bike Maintenance and Downtime Data**: Understanding the frequency of bike repairs or downtime could help optimize the operational side of the business, ensuring that bikes are in good condition during peak usage times.
+- **Event Data**: Including data on local events, festivals, or holidays would help understand their impact on bike usage, especially for casual riders who may be more inclined to use bikes for tourism or recreational purposes.
+
+These additional data sources would provide a more comprehensive view of bike usage patterns and allow for more granular insights and actionable strategies.
